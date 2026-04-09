@@ -252,7 +252,8 @@
 
   function updateRow(id, w, etaSecs) {
     const row = document.getElementById(id);
-    const pct = w.pct_used || 0;
+    // Window.pct_used is a @property so it's NOT in the JSON — recompute here.
+    const pct = w.limit > 0 ? (100 * w.billable_tokens / w.limit) : 0;
     row.classList.remove("warn", "alert");
     const cls = colorClass(pct);
     if (cls) row.classList.add(cls);
