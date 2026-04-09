@@ -24,22 +24,28 @@ uv run pytest -q
 
 ## Usage
 
+> **Note on flag order:** `--plan`, `--limit-*`, `--claude-dir`, `--prices`,
+> and `--limits` are **global** flags and must come *before* the subcommand.
+> `--host` and `--port` belong to `serve` and go *after* it.
+
 ```bash
 # one-shot snapshot
-uv run claude-monitor snapshot --plan max5
+uv run claude-monitor --plan max5 snapshot
 
 # live TUI (rich), refreshes every 2s
-uv run claude-monitor live --plan max5
+uv run claude-monitor --plan max5 live
 
 # local web dashboard (terminal/hacker black-green theme)
-uv run claude-monitor serve --plan max5 --port 8765
+uv run claude-monitor --plan max5 serve --port 8765
 # then open http://127.0.0.1:8765/
 
 # custom limits
-uv run claude-monitor --plan custom --limit-5h 50000 --limit-weekly 1000000 --limit-weekly-opus 100000 snapshot
+uv run claude-monitor --plan custom \
+    --limit-5h 50000 --limit-weekly 1000000 --limit-weekly-opus 100000 \
+    snapshot
 
 # inspect default + resolved limits
-uv run claude-monitor show-limits --plan max20
+uv run claude-monitor --plan max20 show-limits
 ```
 
 ## How it works
