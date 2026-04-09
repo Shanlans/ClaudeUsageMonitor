@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>claude-monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #000;
+    --fg: #00ff66;
+    --fg-dim: #007733;
+    --fg-dimmer: #003a18;
+    --warn: #ffcc00;
+    --alert: #ff5555;
+    --border: #00ff66;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'IBM Plex Mono', 'Menlo', monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+  body {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 24px 16px;
+    text-shadow: 0 0 4px currentColor;
+  }
+  .frame {
+    width: 100%;
+    max-width: 760px;
+    border: 1px solid var(--border);
+    padding: 14px 20px 18px;
+    background: #000;
+    box-shadow: 0 0 14px rgba(0, 255, 102, 0.15) inset, 0 0 12px rgba(0, 255, 102, 0.05);
+  }
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--fg-dim);
+    margin-bottom: 14px;
+  }
+  .header .left { font-weight: 700; }
+  .header .right { color: var(--fg-dim); font-weight: 500; }
+  .dot {
+    display: inline-block;
+    width: 0.7em; height: 0.7em;
+    border-radius: 50%;
+    background: var(--fg);
+    margin-right: 6px;
+    box-shadow: 0 0 6px var(--fg);
+    animation: blink 1.4s infinite;
+  }
+  @keyframes blink { 0%,60% { opacity: 1; } 70%,100% { opacity: 0.3; } }
+  pre {
+    margin: 0;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    white-space: pre;
+  }
+  .bars { margin-bottom: 14px; }
+  .bar-row {
+    display: grid;
+    grid-template-columns: 55px 1fr auto auto auto;
+    gap: 14px;
+    align-items: baseline;
+    padding: 3px 0;
+  }
+  .bar-row .label { color: var(--fg-dim); }
+  .bar-row .bar { color: var(--fg); letter-spacing: 0.5px; }
+  .bar-row .pct { text-align: right; min-width: 58px; }
+  .bar-row .used { color: var(--fg); }
+  .bar-row .eta { color: var(--fg-dim); min-width: 90px; text-align: right; }
+  .bar-row.warn .bar,
+  .bar-row.warn .pct { color: var(--warn); text-shadow: 0 0 5px var(--warn); }
+  .bar-row.alert .bar,
+  .bar-row.alert .pct { color: var(--alert); text-shadow: 0 0 6px var(--alert); }
+
+  .divider {
+    border-top: 1px solid var(--fg-dim);
+    margin: 14px 0;
+  }
+  .panel-title {
+    color: var(--fg-dim);
+    text-transform: lowercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+    font-size: 0.85em;
+  }
+  .burn-grid {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    column-gap: 18px;
+    row-gap: 2px;
+    margin-bottom: 10px;
+  }
+  .burn-grid .k { color: var(--fg-dim); }
+  .burn-grid .v { text-align: right; color: var(--fg); }
+  .spark {
+    color: var(--fg);
+    white-space: pre;
+    margin: 2px 0 12px;
+    letter-spacing: 1px;
+  }
+  table { border-collapse: collapse; width: 100%; }
+  th, td {
+    text-align: right;
+    padding: 2px 8px;
+    font-weight: 400;
+  }
+  th:first-child, td:first-child { text-align: left; }
+  th {
+    color: var(--fg-dim);
+    border-bottom: 1px dashed var(--fg-dim);
+    text-transform: lowercase;
+    font-size: 0.85em;
+  }
+  td { color: var(--fg); }
+  td.fam { color: var(--fg-dim); }
+
+  .footer {
+    display: flex;
+    justify-content: space-between;
+    padding-top: 10px;
+    margin-top: 12px;
+    border-top: 1px solid var(--fg-dim);
+    color: var(--fg-dim);
+  }
+  .footer .total { color: var(--fg); font-weight: 700; }
+
+  a, a:visited { color: var(--fg-dim); }
+  ::selection { background: var(--fg-dim); color: #000; }
+</style>
+</head>
+<body>
+<div class="frame" id="frame">
+  <div class="header">
+    <div class="left">[claude-monitor] <span id="plan">plan=?</span>  uptime=<span id="uptime">0m</span></div>
+    <div class="right"><span class="dot"></span>LIVE</div>
+  </div>
+
+  <div class="bars">
+    <div class="bar-row" id="row-5h">
+      <span class="label">5h</span>
+      <pre class="bar">[----------------------------------------]</pre>
+      <span class="pct">--.-%</span>
+      <span class="used">-- / --</span>
+      <span class="eta">eta --</span>
+    </div>
+    <div class="bar-row" id="row-wk">
+      <span class="label">wk</span>
+      <pre class="bar">[----------------------------------------]</pre>
+      <span class="pct">--.-%</span>
+      <span class="used">-- / --</span>
+      <span class="eta">eta --</span>
+    </div>
+    <div class="bar-row" id="row-opus">
+      <span class="label">opus</span>
+      <pre class="bar">[----------------------------------------]</pre>
+      <span class="pct">--.-%</span>
+      <span class="used">-- / --</span>
+      <span class="eta">eta --</span>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="panel-title">burn rate</div>
+  <div class="burn-grid">
+    <span class="k">total</span><span class="v" id="burn-total">0 tok/min</span><span class="k" id="burn-eta5">eta·5h --</span>
+    <span class="k">opus</span><span class="v" id="burn-opus">0 tok/min</span><span class="k" id="burn-etawk">eta·wk --</span>
+    <span class="k">sonnet</span><span class="v" id="burn-sonnet">0 tok/min</span><span class="k" id="burn-etaopus">eta·opus --</span>
+    <span class="k">haiku</span><span class="v" id="burn-haiku">0 tok/min</span><span class="k"></span>
+  </div>
+
+  <div class="panel-title">burn history (last 30 min)</div>
+  <pre class="spark" id="spark">                                                    </pre>
+
+  <div class="divider"></div>
+
+  <div class="panel-title">by model (5h window)</div>
+  <table id="bymodel">
+    <thead>
+      <tr>
+        <th>family</th><th>rec</th><th>input</th><th>output</th><th>cache_c</th><th>cache_r</th><th>cost</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <div class="footer">
+    <span>sessions: <span id="sessions">0</span></span>
+    <span>total cost: <span class="total" id="total-cost">$0.0000</span></span>
+  </div>
+</div>
+
+<script>
+  const BAR_WIDTH = 40;
+  const SPARK_CHARS = "▁▂▃▄▅▆▇█";
+  const SPARK_LEN = 60;
+  const burnHistory = [];
+  const started = Date.now();
+
+  function bar(pct) {
+    pct = Math.max(0, Math.min(100, pct));
+    const filled = Math.round(BAR_WIDTH * pct / 100);
+    return "[" + "█".repeat(filled) + "░".repeat(BAR_WIDTH - filled) + "]";
+  }
+
+  function fmtNum(n) {
+    if (n == null || isNaN(n)) return "--";
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + "M";
+    if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
+    return String(n);
+  }
+
+  function fmtCost(n) { return "$" + (n || 0).toFixed(4); }
+
+  function fmtEta(secs) {
+    if (secs == null || secs < 0) return "--";
+    if (secs >= 7 * 86400) return ">7d";
+    const d = Math.floor(secs / 86400);
+    const h = Math.floor((secs % 86400) / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    if (d) return d + "d" + String(h).padStart(2, "0") + "h";
+    if (h) return h + "h" + String(m).padStart(2, "0") + "m";
+    return m + "m";
+  }
+
+  function fmtUptime(ms) {
+    const t = Math.floor(ms / 1000);
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    return h ? (h + "h" + String(m).padStart(2, "0") + "m") : (m + "m");
+  }
+
+  function colorClass(pct) {
+    if (pct >= 85) return "alert";
+    if (pct >= 60) return "warn";
+    return "";
+  }
+
+  function updateRow(id, w, etaSecs) {
+    const row = document.getElementById(id);
+    const pct = w.pct_used || 0;
+    row.classList.remove("warn", "alert");
+    const cls = colorClass(pct);
+    if (cls) row.classList.add(cls);
+    row.querySelector(".bar").textContent = bar(pct);
+    row.querySelector(".pct").textContent = pct.toFixed(1) + "%";
+    row.querySelector(".used").textContent =
+      fmtNum(w.billable_tokens) + " / " + (w.limit > 0 ? fmtNum(w.limit) : "∞");
+    row.querySelector(".eta").textContent = "eta " + fmtEta(etaSecs);
+  }
+
+  function sparkline(values) {
+    if (!values.length) return " ".repeat(SPARK_LEN);
+    const tail = values.slice(-SPARK_LEN);
+    const max = Math.max(...tail, 1);
+    return tail.map(v => {
+      if (v <= 0) return " ";
+      const idx = Math.min(SPARK_CHARS.length - 1,
+        Math.floor((v / max) * SPARK_CHARS.length));
+      return SPARK_CHARS[idx];
+    }).join("");
+  }
+
+  function render(snap) {
+    document.getElementById("plan").textContent = "plan=" + snap.plan;
+    document.getElementById("uptime").textContent = fmtUptime(Date.now() - started);
+
+    updateRow("row-5h", snap.window_5h, snap.eta_5h);
+    updateRow("row-wk", snap.window_weekly, snap.eta_weekly);
+    updateRow("row-opus", snap.window_weekly_opus, snap.eta_weekly_opus);
+
+    const burn = snap.burn_tokens_per_min || 0;
+    document.getElementById("burn-total").textContent = burn.toFixed(1) + " tok/min";
+    const by = snap.burn_by_family || {};
+    document.getElementById("burn-opus").textContent = (by.opus || 0).toFixed(1) + " tok/min";
+    document.getElementById("burn-sonnet").textContent = (by.sonnet || 0).toFixed(1) + " tok/min";
+    document.getElementById("burn-haiku").textContent = (by.haiku || 0).toFixed(1) + " tok/min";
+
+    document.getElementById("burn-eta5").textContent = "eta·5h " + fmtEta(snap.eta_5h);
+    document.getElementById("burn-etawk").textContent = "eta·wk " + fmtEta(snap.eta_weekly);
+    document.getElementById("burn-etaopus").textContent = "eta·opus " + fmtEta(snap.eta_weekly_opus);
+
+    burnHistory.push(burn);
+    if (burnHistory.length > SPARK_LEN) burnHistory.shift();
+    document.getElementById("spark").textContent = sparkline(burnHistory);
+
+    const tbody = document.querySelector("#bymodel tbody");
+    tbody.innerHTML = "";
+    const fams = ["opus", "sonnet", "haiku", "other"];
+    const byFam = snap.window_5h.by_family || {};
+    for (const fam of fams) {
+      const mb = byFam[fam];
+      if (!mb) continue;
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td class='fam'>" + fam + "</td>" +
+        "<td>" + mb.records + "</td>" +
+        "<td>" + fmtNum(mb.input) + "</td>" +
+        "<td>" + fmtNum(mb.output) + "</td>" +
+        "<td>" + fmtNum(mb.cache_create) + "</td>" +
+        "<td>" + fmtNum(mb.cache_read) + "</td>" +
+        "<td>" + fmtCost(mb.cost_usd) + "</td>";
+      tbody.appendChild(tr);
+    }
+
+    document.getElementById("sessions").textContent =
+      (snap.active_session_ids || []).length;
+    document.getElementById("total-cost").textContent = fmtCost(snap.total_cost_usd);
+  }
+
+  const es = new EventSource("/api/stream");
+  es.onmessage = (ev) => {
+    try { render(JSON.parse(ev.data)); }
+    catch (e) { console.error(e); }
+  };
+  es.onerror = () => { /* browser will auto-reconnect */ };
+</script>
+</body>
+</html>
