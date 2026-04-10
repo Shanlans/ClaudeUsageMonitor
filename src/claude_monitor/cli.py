@@ -122,5 +122,50 @@ def show_limits() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Calibration commands
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def calibrate(
+    no_send: Annotated[
+        bool, typer.Option("--no-send", help="Skip sending the calibration prompt (measure external usage).")
+    ] = False,
+) -> None:
+    """Send a known large prompt and measure the token delta for limit calibration.
+
+    After the prompt completes, you'll be asked for the before/after usage %
+    from Claude.ai's rate limit indicator so we can compute your real limit.
+    """
+    from claude_monitor.calibrate import run_calibrate
+
+    run_calibrate(_state["settings"], skip_prompt=no_send)
+
+
+@app.command("mark-limit")
+def mark_limit(
+    window: Annotated[
+        str, typer.Option("--window", help="Which window you hit: 5h, weekly, or weekly_opus.")
+    ] = "5h",
+) -> None:
+    """Record the current window total as the actual limit.
+
+    Run this the moment you get rate-limited by Claude. It saves your current
+    5h (or weekly) billable token total as the real cap for future reference.
+    """
+    from claude_monitor.calibrate import run_mark_limit
+
+    run_mark_limit(_state["settings"], window=window)
+
+
+@app.command("calibration-status")
+def calibration_status() -> None:
+    """Show calibration history and current calibrated limits."""
+    from claude_monitor.calibrate import show_calibration
+
+    show_calibration(_state["settings"])
+
+
 if __name__ == "__main__":
     app()
