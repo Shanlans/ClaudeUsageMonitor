@@ -52,14 +52,29 @@ def test_load_calibrated_limits_returns_plan_limits(tmp_path: Path) -> None:
         "records": [],
         "calibrated_5h": 75000,
         "calibrated_weekly": 2000000,
-        "calibrated_weekly_opus": 150000,
+        "calibrated_weekly_sonnet": 150000,
     }))
     with patch("claude_monitor.calibrate.CALIBRATION_FILE", f):
         lim = load_calibrated_limits()
     assert lim is not None
     assert lim.h5 == 75000
     assert lim.weekly_total == 2000000
-    assert lim.weekly_opus == 150000
+    assert lim.weekly_sonnet == 150000
+
+
+def test_backward_compat_weekly_opus_key(tmp_path: Path) -> None:
+    """Older calibration.json files used `calibrated_weekly_opus`; must still load."""
+    f = tmp_path / "calibration.json"
+    f.write_text(json.dumps({
+        "records": [],
+        "calibrated_5h": 100000,
+        "calibrated_weekly": 2000000,
+        "calibrated_weekly_opus": 300000,  # old key
+    }))
+    with patch("claude_monitor.calibrate.CALIBRATION_FILE", f):
+        lim = load_calibrated_limits()
+    assert lim is not None
+    assert lim.weekly_sonnet == 300000
 
 
 def test_computed_limit_math() -> None:
@@ -70,3 +85,35 @@ def test_computed_limit_math() -> None:
     pct_delta = pct_after - pct_before  # 8.5
     computed = int(delta / (pct_delta / 100.0))
     assert computed == 82352  # 7000 / 0.085 = 82352.94...
+
+
+def test_estimate_limit_from_observations() -> None:
+    """_estimate_limit averages the billable/pct ratio across observations."""
+    from claude_monitor.calibrate import _estimate_limit
+
+    # Three observations: (billable, claude.ai pct)
+    billable = [18_300, 50_000, 120_000]
+    pcts = [7.0, 20.0, 50.0]
+
+    # ratios: 18300/0.07=261428, 50000/0.20=250000, 120000/0.50=240000
+    # average: 250476
+    result = _estimate_limit(billable, pcts)
+    assert result is not None
+    assert 249_000 < result < 252_000
+
+
+def test_estimate_limit_skips_zero_pct() -> None:
+    """Observations with pct<0.5 carry no signal and should be skipped."""
+    from claude_monitor.calibrate import _estimate_limit
+
+    result = _estimate_limit([10_000, 50_000], [0.0, 20.0])
+    # Only the second observation is useful → 50000/0.2 = 250000
+    assert result == 250_000
+
+
+def test_estimate_limit_returns_none_when_no_useful_data() -> None:
+    from claude_monitor.calibrate import _estimate_limit
+
+    assert _estimate_limit([10_000], [0.0]) is None
+    assert _estimate_limit([], []) is None
+    assert _estimate_limit([100], [None]) is None

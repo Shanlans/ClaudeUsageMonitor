@@ -179,13 +179,13 @@ class UsageStore:
             limit=limits.weekly_total,
             weights=weights,
         )
-        wopus = self._build_window(
-            label="weekly_opus",
+        wsonnet = self._build_window(
+            label="weekly_sonnet",
             start=now - timedelta(seconds=WINDOW_WEEKLY_SECONDS),
             end=now,
-            limit=limits.weekly_opus,
+            limit=limits.weekly_sonnet,
             weights=weights,
-            family_filter="opus",
+            family_filter="sonnet",
         )
 
         burn, burn_fam = self.burn_rate(now, weights)
@@ -197,12 +197,12 @@ class UsageStore:
             limits=limits,
             window_5h=w5h,
             window_weekly=wweek,
-            window_weekly_opus=wopus,
+            window_weekly_sonnet=wsonnet,
             burn_tokens_per_min=burn,
             burn_by_family=burn_fam,
             eta_5h=self._eta(w5h, burn),
             eta_weekly=self._eta(wweek, burn),
-            eta_weekly_opus=self._eta(wopus, burn_fam.get("opus", 0.0)),
+            eta_weekly_sonnet=self._eta(wsonnet, burn_fam.get("sonnet", 0.0)),
             active_session_ids=session_ids,
             total_cost_usd=self._total_cost,
         )

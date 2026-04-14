@@ -26,7 +26,7 @@ def _build_settings(
     plan: Plan,
     limit_5h: int | None,
     limit_weekly: int | None,
-    limit_weekly_opus: int | None,
+    limit_weekly_sonnet: int | None,
     limits_path: Path | None,
     claude_dir: Path | None,
     prices_path: Path | None,
@@ -39,7 +39,7 @@ def _build_settings(
         plan,
         h5=limit_5h,
         weekly=limit_weekly,
-        weekly_opus=limit_weekly_opus,
+        weekly_sonnet=limit_weekly_sonnet,
         limits_path=limits_path,
     )
     weights = TokenWeights(
@@ -62,11 +62,16 @@ def _root(
     plan: Annotated[Plan, typer.Option("--plan", help="Subscription plan.")] = Plan.max5,
     limit_5h: Annotated[Optional[int], typer.Option("--limit-5h", help="Override 5h cap (tokens).")] = None,
     limit_weekly: Annotated[Optional[int], typer.Option("--limit-weekly", help="Override weekly cap (tokens).")] = None,
-    limit_weekly_opus: Annotated[
-        Optional[int], typer.Option("--limit-weekly-opus", help="Override weekly Opus cap (tokens).")
+    limit_weekly_sonnet: Annotated[
+        Optional[int],
+        typer.Option(
+            "--limit-weekly-sonnet",
+            "--limit-weekly-opus",
+            help="Override weekly Sonnet cap (tokens). `--limit-weekly-opus` kept as alias.",
+        ),
     ] = None,
     limits_path: Annotated[
-        Optional[Path], typer.Option("--limits", help="JSON file with {h5, weekly_total, weekly_opus}.")
+        Optional[Path], typer.Option("--limits", help="JSON file with {h5, weekly_total, weekly_sonnet}.")
     ] = None,
     claude_dir: Annotated[
         Optional[Path], typer.Option("--claude-dir", help="Path to ~/.claude/projects.")
@@ -94,7 +99,7 @@ def _root(
         plan,
         limit_5h,
         limit_weekly,
-        limit_weekly_opus,
+        limit_weekly_sonnet,
         limits_path,
         claude_dir,
         prices_path,
@@ -150,12 +155,15 @@ def show_limits() -> None:
     settings: Settings = _state["settings"]
     console.print("[bold bright_green]default plan limits (approximate):[/bold bright_green]")
     for p, l in PLAN_LIMITS.items():
-        console.print(f"  {p.value:<7} 5h={l.h5:>10,}  weekly={l.weekly_total:>12,}  weekly_opus={l.weekly_opus:>10,}")
+        console.print(
+            f"  {p.value:<7} 5h={l.h5:>10,}  weekly={l.weekly_total:>12,}  "
+            f"weekly_sonnet={l.weekly_sonnet:>10,}"
+        )
     console.print()
     console.print(f"[bold bright_green]resolved for --plan {settings.plan.value}:[/bold bright_green]")
     console.print(
         f"  5h={settings.limits.h5:,}  weekly={settings.limits.weekly_total:,}  "
-        f"weekly_opus={settings.limits.weekly_opus:,}"
+        f"weekly_sonnet={settings.limits.weekly_sonnet:,}"
     )
 
 
@@ -183,7 +191,7 @@ def calibrate(
 @app.command("mark-limit")
 def mark_limit(
     window: Annotated[
-        str, typer.Option("--window", help="Which window you hit: 5h, weekly, or weekly_opus.")
+        str, typer.Option("--window", help="Which window you hit: 5h, weekly, or weekly_sonnet.")
     ] = "5h",
 ) -> None:
     """Record the current window total as the actual limit.
@@ -194,6 +202,40 @@ def mark_limit(
     from claude_monitor.calibrate import run_mark_limit
 
     run_mark_limit(_state["settings"], window=window)
+
+
+@app.command()
+def record(
+    pct_5h: Annotated[
+        Optional[float],
+        typer.Option("--5h-pct", help="Claude.ai's current '5-hour session' % used."),
+    ] = None,
+    pct_weekly: Annotated[
+        Optional[float],
+        typer.Option("--weekly-pct", help="Claude.ai's current 'Weekly · All models' % used."),
+    ] = None,
+    pct_weekly_sonnet: Annotated[
+        Optional[float],
+        typer.Option("--weekly-sonnet-pct", help="Claude.ai's current 'Weekly · Sonnet only' % used."),
+    ] = None,
+) -> None:
+    """Record a paired (snapshot, Claude.ai % values) observation.
+
+    Go to Claude.ai → Settings → Usage, note the three percentages shown
+    there, then run this command. It takes a snapshot at the same moment
+    and stores both in ~/.config/claude-monitor/calibration.json. Over a
+    few observations, it computes your real plan limits by regression.
+
+    Pass values via flags, or run with no args to be prompted interactively.
+    """
+    from claude_monitor.calibrate import run_record
+
+    run_record(
+        _state["settings"],
+        pct_5h=pct_5h,
+        pct_weekly=pct_weekly,
+        pct_weekly_sonnet=pct_weekly_sonnet,
+    )
 
 
 @app.command("calibration-status")

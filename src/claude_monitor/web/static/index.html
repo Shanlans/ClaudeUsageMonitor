@@ -164,8 +164,8 @@
       <span class="used">-- / --</span>
       <span class="eta">eta --</span>
     </div>
-    <div class="bar-row" id="row-opus">
-      <span class="label">opus</span>
+    <div class="bar-row" id="row-sonnet">
+      <span class="label">sonnet</span>
       <pre class="bar">[----------------------------------------]</pre>
       <span class="pct">--.-%</span>
       <span class="used">-- / --</span>
@@ -179,7 +179,7 @@
   <div class="burn-grid">
     <span class="k">total</span><span class="v" id="burn-total">0 tok/min</span><span class="k" id="burn-eta5">eta·5h --</span>
     <span class="k">opus</span><span class="v" id="burn-opus">0 tok/min</span><span class="k" id="burn-etawk">eta·wk --</span>
-    <span class="k">sonnet</span><span class="v" id="burn-sonnet">0 tok/min</span><span class="k" id="burn-etaopus">eta·opus --</span>
+    <span class="k">sonnet</span><span class="v" id="burn-sonnet">0 tok/min</span><span class="k" id="burn-etasonnet">eta·sonnet --</span>
     <span class="k">haiku</span><span class="v" id="burn-haiku">0 tok/min</span><span class="k"></span>
   </div>
 
@@ -282,7 +282,7 @@
 
     updateRow("row-5h", snap.window_5h, snap.eta_5h);
     updateRow("row-wk", snap.window_weekly, snap.eta_weekly);
-    updateRow("row-opus", snap.window_weekly_opus, snap.eta_weekly_opus);
+    updateRow("row-sonnet", snap.window_weekly_sonnet, snap.eta_weekly_sonnet);
 
     const burn = snap.burn_tokens_per_min || 0;
     document.getElementById("burn-total").textContent = burn.toFixed(1) + " tok/min";
@@ -293,7 +293,7 @@
 
     document.getElementById("burn-eta5").textContent = "eta·5h " + fmtEta(snap.eta_5h);
     document.getElementById("burn-etawk").textContent = "eta·wk " + fmtEta(snap.eta_weekly);
-    document.getElementById("burn-etaopus").textContent = "eta·opus " + fmtEta(snap.eta_weekly_opus);
+    document.getElementById("burn-etasonnet").textContent = "eta·sonnet " + fmtEta(snap.eta_weekly_sonnet);
 
     burnHistory.push(burn);
     if (burnHistory.length > SPARK_LEN) burnHistory.shift();

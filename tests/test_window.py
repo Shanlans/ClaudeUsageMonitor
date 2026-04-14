@@ -85,17 +85,17 @@ def test_fractional_weights(sample_jsonl: Path, frozen_now: datetime) -> None:
     assert snap.window_5h.billable_tokens == 4137
 
 
-def test_weekly_opus_window_only_counts_opus(sample_jsonl: Path, frozen_now: datetime) -> None:
+def test_weekly_sonnet_window_only_counts_sonnet(sample_jsonl: Path, frozen_now: datetime) -> None:
     store = UsageStore()
     _load(store, sample_jsonl)
     settings = Settings(plan=Plan.max5, limits=PLAN_LIMITS[Plan.max5])
     snap = store.snapshot(settings, now=frozen_now)
 
-    # Opus rows within 7d: row #3 (10+500=510) + row #6 (3000) = 3510
-    assert snap.window_weekly_opus.billable_tokens == 510 + 3000
-    assert snap.window_weekly_opus.records == 2
-    assert "sonnet" not in snap.window_weekly_opus.by_family
-    assert "haiku" not in snap.window_weekly_opus.by_family
+    # Sonnet rows within 7d: only row #2 (100+200=300). Row #7 is >7d old.
+    assert snap.window_weekly_sonnet.billable_tokens == 300
+    assert snap.window_weekly_sonnet.records == 1
+    assert "opus" not in snap.window_weekly_sonnet.by_family
+    assert "haiku" not in snap.window_weekly_sonnet.by_family
 
 
 def test_prune_drops_records_older_than_retention(sample_jsonl: Path, frozen_now: datetime) -> None:
@@ -129,7 +129,7 @@ def test_burn_rate_and_eta(sample_jsonl: Path, frozen_now: datetime) -> None:
 def test_custom_plan_limits_override() -> None:
     from claude_monitor.config import load_limits
 
-    lim = load_limits(Plan.custom, h5=50_000, weekly=800_000, weekly_opus=80_000)
+    lim = load_limits(Plan.custom, h5=50_000, weekly=800_000, weekly_sonnet=80_000)
     assert lim.h5 == 50_000
     assert lim.weekly_total == 800_000
-    assert lim.weekly_opus == 80_000
+    assert lim.weekly_sonnet == 80_000

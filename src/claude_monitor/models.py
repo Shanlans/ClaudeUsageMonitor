@@ -52,7 +52,7 @@ class ModelBreakdown:
 
 @dataclass
 class Window:
-    label: str  # "5h" | "weekly" | "weekly_opus"
+    label: str  # "5h" | "weekly" | "weekly_sonnet"
     start: datetime
     end: datetime
     billable_tokens: int
@@ -76,11 +76,11 @@ class Snapshot:
     limits: PlanLimits
     window_5h: Window
     window_weekly: Window
-    window_weekly_opus: Window
+    window_weekly_sonnet: Window
     burn_tokens_per_min: float
     burn_by_family: dict[str, float]
     eta_5h: timedelta | None
     eta_weekly: timedelta | None
-    eta_weekly_opus: timedelta | None
+    eta_weekly_sonnet: timedelta | None
     active_session_ids: list[str] = field(default_factory=list)
     total_cost_usd: float = 0.0

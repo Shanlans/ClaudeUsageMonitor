@@ -88,7 +88,7 @@ def _render(snap: Snapshot, uptime: str) -> Panel:
     bars = Group(
         _window_row("5h", snap.window_5h, snap.eta_5h),
         _window_row("wk", snap.window_weekly, snap.eta_weekly),
-        _window_row("opus", snap.window_weekly_opus, snap.eta_weekly_opus),
+        _window_row("sonnet", snap.window_weekly_sonnet, snap.eta_weekly_sonnet),
     )
 
     burn_table = Table.grid(padding=(0, 2))

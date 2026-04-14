@@ -73,22 +73,42 @@ class CalibrationRecord:
 
 
 @dataclass
+class Observation:
+    """One paired observation of Claude.ai UI % + our tool's billable tokens."""
+
+    timestamp: str
+    plan: str
+    snapshot_5h_billable: int
+    snapshot_weekly_billable: int
+    snapshot_weekly_sonnet_billable: int
+    ui_pct_5h: float | None = None
+    ui_pct_weekly: float | None = None
+    ui_pct_weekly_sonnet: float | None = None
+
+
+@dataclass
 class CalibrationData:
     records: list[CalibrationRecord] = field(default_factory=list)
+    observations: list[Observation] = field(default_factory=list)
     calibrated_5h: int | None = None
     calibrated_weekly: int | None = None
-    calibrated_weekly_opus: int | None = None
+    calibrated_weekly_sonnet: int | None = None
 
 
 def _load_data() -> CalibrationData:
     if CALIBRATION_FILE.exists():
         raw = json.loads(CALIBRATION_FILE.read_text())
         recs = [CalibrationRecord(**r) for r in raw.get("records", [])]
+        obs = [Observation(**o) for o in raw.get("observations", [])]
         return CalibrationData(
             records=recs,
+            observations=obs,
             calibrated_5h=raw.get("calibrated_5h"),
             calibrated_weekly=raw.get("calibrated_weekly"),
-            calibrated_weekly_opus=raw.get("calibrated_weekly_opus"),
+            # Backward compat: older files used "calibrated_weekly_opus".
+            calibrated_weekly_sonnet=raw.get(
+                "calibrated_weekly_sonnet", raw.get("calibrated_weekly_opus")
+            ),
         )
     return CalibrationData()
 
@@ -97,9 +117,10 @@ def _save_data(data: CalibrationData) -> None:
     CALIBRATION_DIR.mkdir(parents=True, exist_ok=True)
     out = {
         "records": [asdict(r) for r in data.records],
+        "observations": [asdict(o) for o in data.observations],
         "calibrated_5h": data.calibrated_5h,
         "calibrated_weekly": data.calibrated_weekly,
-        "calibrated_weekly_opus": data.calibrated_weekly_opus,
+        "calibrated_weekly_sonnet": data.calibrated_weekly_sonnet,
     }
     CALIBRATION_FILE.write_text(json.dumps(out, indent=2) + "\n")
 
@@ -107,13 +128,29 @@ def _save_data(data: CalibrationData) -> None:
 def load_calibrated_limits() -> PlanLimits | None:
     """Return calibrated limits if they exist, else None."""
     data = _load_data()
-    if data.calibrated_5h is None:
+    if data.calibrated_5h is None and data.calibrated_weekly is None and data.calibrated_weekly_sonnet is None:
         return None
     return PlanLimits(
         h5=data.calibrated_5h or 0,
         weekly_total=data.calibrated_weekly or 0,
-        weekly_opus=data.calibrated_weekly_opus or 0,
+        weekly_sonnet=data.calibrated_weekly_sonnet or 0,
     )
+
+
+def _estimate_limit(billable_values: list[int], pct_values: list[float]) -> int | None:
+    """Given N paired (billable, claude.ai pct) observations, estimate the real limit.
+
+    Uses simple ratio averaging: limit ≈ mean(billable[i] / (pct[i]/100))
+    over all points where pct > 0.5 (skip zeros because they carry no signal).
+    """
+    ratios = []
+    for b, p in zip(billable_values, pct_values):
+        if p is None or p < 0.5 or b <= 0:
+            continue
+        ratios.append(b / (p / 100.0))
+    if not ratios:
+        return None
+    return int(sum(ratios) / len(ratios))
 
 
 # ---------------------------------------------------------------------------
@@ -343,10 +380,11 @@ def run_mark_limit(settings: Settings, window: str = "5h") -> None:
         used = snap.window_weekly.billable_tokens
         data.calibrated_weekly = used
         label = "weekly"
-    elif window == "weekly_opus":
-        used = snap.window_weekly_opus.billable_tokens
-        data.calibrated_weekly_opus = used
-        label = "weekly_opus"
+    elif window in ("weekly_sonnet", "weekly_opus"):
+        # Backward compat: accept both names (we now call it weekly_sonnet).
+        used = snap.window_weekly_sonnet.billable_tokens
+        data.calibrated_weekly_sonnet = used
+        label = "weekly_sonnet"
     else:
         console.print(f"[red]Unknown window: {window}[/]")
         return
@@ -369,6 +407,141 @@ def run_mark_limit(settings: Settings, window: str = "5h") -> None:
     )
     console.print(f"  (based on your current {label} window usage at the moment you got rate-limited)")
     console.print(f"  Saved to: {CALIBRATION_FILE}\n")
+
+
+# ---------------------------------------------------------------------------
+# record: paired (snapshot, Claude.ai UI %) observation
+# ---------------------------------------------------------------------------
+def _prompt_pct(console: Console, label: str, preset: float | None) -> float | None:
+    if preset is not None:
+        return preset
+    try:
+        raw = console.input(
+            f"[bright_green]  % for {label} (0-100, or Enter to skip): [/]"
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        console.print(f"  [yellow]couldn't parse {raw!r}, skipping[/]")
+        return None
+
+
+def run_record(
+    settings: Settings,
+    pct_5h: float | None = None,
+    pct_weekly: float | None = None,
+    pct_weekly_sonnet: float | None = None,
+) -> None:
+    """Take a snapshot + record Claude.ai UI percentages at the same moment."""
+    console = Console()
+    _, _, snap = _take_snapshot(settings)
+
+    console.print("\n[bold bright_green]snapshot at this moment[/]\n")
+    tbl = Table(border_style="bright_green", show_header=True)
+    tbl.add_column("window", style="green4")
+    tbl.add_column("billable", justify="right", style="bright_green")
+    tbl.add_column("default limit", justify="right", style="green4")
+    tbl.add_column("shown %", justify="right", style="green4")
+    tbl.add_row(
+        "5h",
+        _fmt(snap.window_5h.billable_tokens),
+        _fmt(snap.window_5h.limit),
+        f"{snap.window_5h.pct_used:.1f}%",
+    )
+    tbl.add_row(
+        "weekly",
+        _fmt(snap.window_weekly.billable_tokens),
+        _fmt(snap.window_weekly.limit),
+        f"{snap.window_weekly.pct_used:.1f}%",
+    )
+    tbl.add_row(
+        "weekly_sonnet",
+        _fmt(snap.window_weekly_sonnet.billable_tokens),
+        _fmt(snap.window_weekly_sonnet.limit),
+        f"{snap.window_weekly_sonnet.pct_used:.1f}%",
+    )
+    console.print(tbl)
+
+    any_preset = any(v is not None for v in (pct_5h, pct_weekly, pct_weekly_sonnet))
+    if not any_preset:
+        console.print(
+            "\n  [green4]Now open Claude.ai → Settings → Usage and type the three % values shown.[/]"
+        )
+
+    p5 = _prompt_pct(console, "5-hour session", pct_5h)
+    pw = _prompt_pct(console, "Weekly · All models", pct_weekly)
+    ps = _prompt_pct(console, "Weekly · Sonnet only", pct_weekly_sonnet)
+
+    obs = Observation(
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        plan=str(settings.plan),
+        snapshot_5h_billable=snap.window_5h.billable_tokens,
+        snapshot_weekly_billable=snap.window_weekly.billable_tokens,
+        snapshot_weekly_sonnet_billable=snap.window_weekly_sonnet.billable_tokens,
+        ui_pct_5h=p5,
+        ui_pct_weekly=pw,
+        ui_pct_weekly_sonnet=ps,
+    )
+
+    data = _load_data()
+    data.observations.append(obs)
+
+    # Recompute calibrated limits from all observations.
+    lim5 = _estimate_limit(
+        [o.snapshot_5h_billable for o in data.observations],
+        [o.ui_pct_5h for o in data.observations],
+    )
+    limw = _estimate_limit(
+        [o.snapshot_weekly_billable for o in data.observations],
+        [o.ui_pct_weekly for o in data.observations],
+    )
+    lims = _estimate_limit(
+        [o.snapshot_weekly_sonnet_billable for o in data.observations],
+        [o.ui_pct_weekly_sonnet for o in data.observations],
+    )
+    if lim5:
+        data.calibrated_5h = lim5
+    if limw:
+        data.calibrated_weekly = limw
+    if lims:
+        data.calibrated_weekly_sonnet = lims
+
+    _save_data(data)
+
+    console.print("\n[bold bright_green]estimated real limits (from all observations):[/]\n")
+    rtbl = Table(border_style="bright_green", show_header=True)
+    rtbl.add_column("window", style="green4")
+    rtbl.add_column("estimate", justify="right", style="bright_green")
+    rtbl.add_column("n obs", justify="right", style="green4")
+
+    def _count_useful(pct_getter) -> int:
+        return sum(1 for o in data.observations if (pct_getter(o) or 0) >= 0.5)
+
+    rtbl.add_row(
+        "5h",
+        f"{lim5:,}" if lim5 else "need more data (non-zero %)",
+        str(_count_useful(lambda o: o.ui_pct_5h)),
+    )
+    rtbl.add_row(
+        "weekly",
+        f"{limw:,}" if limw else "need more data",
+        str(_count_useful(lambda o: o.ui_pct_weekly)),
+    )
+    rtbl.add_row(
+        "weekly_sonnet",
+        f"{lims:,}" if lims else "need more data (0% gives no signal)",
+        str(_count_useful(lambda o: o.ui_pct_weekly_sonnet)),
+    )
+    console.print(rtbl)
+    console.print(
+        f"\n  Saved observation → {CALIBRATION_FILE}"
+        f"\n  [green4]Tip: record another observation when the UI % has moved a few points; "
+        "the estimate gets sharper each time.[/]\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -405,34 +578,60 @@ def show_calibration(settings: Settings) -> None:
         _src(data.calibrated_weekly),
     )
     tbl.add_row(
-        "weekly_opus",
-        f"{data.calibrated_weekly_opus:,}" if data.calibrated_weekly_opus else "—",
-        f"{lim.weekly_opus:,}",
-        _src(data.calibrated_weekly_opus),
+        "weekly_sonnet",
+        f"{data.calibrated_weekly_sonnet:,}" if data.calibrated_weekly_sonnet else "—",
+        f"{lim.weekly_sonnet:,}",
+        _src(data.calibrated_weekly_sonnet),
     )
     console.print(tbl)
 
-    # History
-    if not data.records:
-        console.print("\n  No calibration records yet. Run `claude-monitor calibrate` to start.\n")
-        return
+    # Observations table
+    if data.observations:
+        console.print(f"\n  [green4]{len(data.observations)} paired observation(s):[/]\n")
+        otbl = Table(border_style="green4", show_header=True)
+        otbl.add_column("time", style="green4")
+        otbl.add_column("5h bill", justify="right")
+        otbl.add_column("5h UI%", justify="right")
+        otbl.add_column("wk bill", justify="right")
+        otbl.add_column("wk UI%", justify="right")
+        otbl.add_column("son bill", justify="right")
+        otbl.add_column("son UI%", justify="right")
+        for o in data.observations[-10:]:
+            otbl.add_row(
+                o.timestamp[:19],
+                _fmt(o.snapshot_5h_billable),
+                f"{o.ui_pct_5h:.1f}" if o.ui_pct_5h is not None else "—",
+                _fmt(o.snapshot_weekly_billable),
+                f"{o.ui_pct_weekly:.1f}" if o.ui_pct_weekly is not None else "—",
+                _fmt(o.snapshot_weekly_sonnet_billable),
+                f"{o.ui_pct_weekly_sonnet:.1f}" if o.ui_pct_weekly_sonnet is not None else "—",
+            )
+        console.print(otbl)
 
-    console.print(f"\n  [green4]{len(data.records)} calibration record(s):[/]\n")
-    htbl = Table(border_style="green4", show_header=True)
-    htbl.add_column("time", style="green4")
-    htbl.add_column("window", style="green4")
-    htbl.add_column("billable", justify="right")
-    htbl.add_column("% before", justify="right")
-    htbl.add_column("% after", justify="right")
-    htbl.add_column("computed limit", justify="right", style="bright_green")
-    for r in data.records[-10:]:  # last 10
-        htbl.add_row(
-            r.timestamp[:19],
-            r.window,
-            _fmt(r.measured_billable),
-            f"{r.user_pct_before:.1f}" if r.user_pct_before is not None else "—",
-            f"{r.user_pct_after:.1f}" if r.user_pct_after is not None else "—",
-            f"{r.computed_limit:,}" if r.computed_limit else "—",
-        )
-    console.print(htbl)
-    console.print()
+    # Records table (from calibrate / mark-limit)
+    if data.records:
+        console.print(f"\n  [green4]{len(data.records)} calibration record(s):[/]\n")
+        htbl = Table(border_style="green4", show_header=True)
+        htbl.add_column("time", style="green4")
+        htbl.add_column("window", style="green4")
+        htbl.add_column("billable", justify="right")
+        htbl.add_column("% before", justify="right")
+        htbl.add_column("% after", justify="right")
+        htbl.add_column("computed limit", justify="right", style="bright_green")
+        for r in data.records[-10:]:
+            htbl.add_row(
+                r.timestamp[:19],
+                r.window,
+                _fmt(r.measured_billable),
+                f"{r.user_pct_before:.1f}" if r.user_pct_before is not None else "—",
+                f"{r.user_pct_after:.1f}" if r.user_pct_after is not None else "—",
+                f"{r.computed_limit:,}" if r.computed_limit else "—",
+            )
+        console.print(htbl)
+
+    if not data.records and not data.observations:
+        console.print("\n  No calibration data yet.")
+        console.print("  Run [bold]claude-monitor record[/] to add a paired observation.")
+        console.print("  Or [bold]claude-monitor calibrate[/] to send a test prompt.\n")
+    else:
+        console.print()
