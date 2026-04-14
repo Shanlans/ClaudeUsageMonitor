@@ -34,6 +34,7 @@ def _build_settings(
     w_output: float | None,
     w_cache_create: float | None,
     w_cache_read: float | None,
+    ignore_calibration: bool,
 ) -> Settings:
     limits = load_limits(
         plan,
@@ -41,6 +42,7 @@ def _build_settings(
         weekly=limit_weekly,
         weekly_sonnet=limit_weekly_sonnet,
         limits_path=limits_path,
+        ignore_calibration=ignore_calibration,
     )
     weights = TokenWeights(
         input=w_input if w_input is not None else 1.0,
@@ -94,6 +96,13 @@ def _root(
         Optional[float],
         typer.Option("--weight-cache-read", help="Weight for cache_read tokens (default 0.0)."),
     ] = None,
+    ignore_calibration: Annotated[
+        bool,
+        typer.Option(
+            "--ignore-calibration",
+            help="Ignore calibrated values from ~/.config/claude-monitor/calibration.json; use plan defaults.",
+        ),
+    ] = False,
 ) -> None:
     _state["settings"] = _build_settings(
         plan,
@@ -107,6 +116,7 @@ def _root(
         w_output,
         w_cache_create,
         w_cache_read,
+        ignore_calibration,
     )
 
 

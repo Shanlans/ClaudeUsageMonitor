@@ -66,16 +66,21 @@ def default_weights() -> TokenWeights:
 # and they shift over time. Override via CLI flags or CLAUDE_MONITOR_LIMITS_JSON.
 #
 # Calibration notes:
-# - Max5 h5 = 261_000 is a tentative estimate from a single observation
-#   (Claude.ai UI showed 7% used while snapshot reported ~18.3k billable
-#   with default weights input=1 output=1 cache_*=0). Needs more data.
-# - Weekly caps are pure guesses. Collect more paired observations via
-#   `claude-monitor record` to refine.
+# - Max5 weekly_total = 2_530_000 from 3 paired observations converging
+#   to ~2.53M (ratio billable/UI% was very stable across samples). This
+#   is the most reliable number in this table.
+# - Max5 h5 = 261_000 is a rough single-observation estimate. The real
+#   5h cap is harder to pin down because Anthropic uses a FIXED 5h
+#   block while our tool currently slides a rolling 5h window, so
+#   observations taken near block boundaries are noisy. Plan: switch
+#   to block mode in a later commit.
 # - Pro and Max20 values are unchanged from the community defaults
 #   (Maciek-roboblog/Claude-Code-Usage-Monitor) pending calibration data.
+# - weekly_sonnet caps are guesses — all 0% observations so far carry
+#   no signal.
 PLAN_LIMITS: dict[Plan, PlanLimits] = {
     Plan.pro: PlanLimits(h5=19_000, weekly_total=300_000, weekly_sonnet=0),
-    Plan.max5: PlanLimits(h5=261_000, weekly_total=1_900_000, weekly_sonnet=200_000),
+    Plan.max5: PlanLimits(h5=261_000, weekly_total=2_530_000, weekly_sonnet=200_000),
     Plan.max20: PlanLimits(h5=220_000, weekly_total=7_600_000, weekly_sonnet=800_000),
 }
 
@@ -100,28 +105,79 @@ def load_limits(
     weekly: int | None = None,
     weekly_sonnet: int | None = None,
     limits_path: Path | None = None,
+    ignore_calibration: bool = False,
 ) -> PlanLimits:
-    """Resolve effective plan limits with CLI/env/file overrides.
+    """Resolve effective plan limits with CLI/env/file/calibration overrides.
 
-    Precedence: explicit h5/weekly/weekly_sonnet flags > --limits file > env var > plan default.
-    For plan=custom, at least one explicit value is required.
+    Precedence (highest first):
+      1. explicit h5 / weekly / weekly_sonnet flags
+      2. --limits JSON file or CLAUDE_MONITOR_LIMITS_JSON env var
+      3. calibrated values from ~/.config/claude-monitor/calibration.json
+         (auto-computed by `claude-monitor record`). Pass
+         ignore_calibration=True to skip this layer.
+      4. plan default (PLAN_LIMITS)
 
-    Backward compat: JSON files and env vars accept both `weekly_sonnet`
-    and the older `weekly_opus` key (they're treated as aliases).
+    For plan=custom, at least one explicit override is required.
+
+    Backward compat: JSON files accept both `weekly_sonnet` and the
+    older `weekly_opus` key (treated as aliases).
     """
     base = PLAN_LIMITS.get(plan, PLAN_LIMITS[Plan.max5])
 
-    # Env override
+    # Layer 3: calibrated values from calibration.json.
+    calib_h5: int | None = None
+    calib_weekly: int | None = None
+    calib_weekly_sonnet: int | None = None
+    if not ignore_calibration:
+        try:
+            # Import here to avoid circular imports at module load.
+            from claude_monitor.calibrate import load_calibrated_limits
+
+            calib = load_calibrated_limits()
+            if calib is not None:
+                calib_h5 = calib.h5 or None
+                calib_weekly = calib.weekly_total or None
+                calib_weekly_sonnet = calib.weekly_sonnet or None
+        except Exception:
+            # Never crash if calibration file is corrupted or missing.
+            pass
+
+    # Layer 2: file overrides.
     env_path = os.environ.get("CLAUDE_MONITOR_LIMITS_JSON")
     file_override: dict = {}
     path_to_read = limits_path or (Path(env_path) if env_path else None)
     if path_to_read is not None and path_to_read.exists():
         file_override = json.loads(path_to_read.read_text())
 
-    eff_h5 = h5 if h5 is not None else file_override.get("h5", base.h5)
-    eff_weekly = weekly if weekly is not None else file_override.get("weekly_total", base.weekly_total)
-    file_weekly_sonnet = file_override.get("weekly_sonnet", file_override.get("weekly_opus", base.weekly_sonnet))
-    eff_weekly_sonnet = weekly_sonnet if weekly_sonnet is not None else file_weekly_sonnet
+    # Resolve each field (highest precedence wins).
+    eff_h5 = (
+        h5
+        if h5 is not None
+        else file_override.get("h5")
+        if "h5" in file_override
+        else calib_h5
+        if calib_h5 is not None
+        else base.h5
+    )
+    eff_weekly = (
+        weekly
+        if weekly is not None
+        else file_override.get("weekly_total")
+        if "weekly_total" in file_override
+        else calib_weekly
+        if calib_weekly is not None
+        else base.weekly_total
+    )
+    file_ws = file_override.get("weekly_sonnet", file_override.get("weekly_opus"))
+    eff_weekly_sonnet = (
+        weekly_sonnet
+        if weekly_sonnet is not None
+        else file_ws
+        if file_ws is not None
+        else calib_weekly_sonnet
+        if calib_weekly_sonnet is not None
+        else base.weekly_sonnet
+    )
 
     if plan == Plan.custom and h5 is None and weekly is None and weekly_sonnet is None and not file_override:
         raise ValueError(
