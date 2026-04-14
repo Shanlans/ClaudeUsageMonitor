@@ -9,7 +9,7 @@ import typer
 from rich.console import Console
 
 from claude_monitor.aggregator import UsageStore
-from claude_monitor.config import PLAN_LIMITS, Plan, Settings, load_limits
+from claude_monitor.config import PLAN_LIMITS, Plan, Settings, TokenWeights, load_limits
 from claude_monitor.ingest import seed_and_tail
 from claude_monitor.tail import FileTailer
 
@@ -30,6 +30,10 @@ def _build_settings(
     limits_path: Path | None,
     claude_dir: Path | None,
     prices_path: Path | None,
+    w_input: float | None,
+    w_output: float | None,
+    w_cache_create: float | None,
+    w_cache_read: float | None,
 ) -> Settings:
     limits = load_limits(
         plan,
@@ -38,7 +42,13 @@ def _build_settings(
         weekly_opus=limit_weekly_opus,
         limits_path=limits_path,
     )
-    settings = Settings(plan=plan, limits=limits)
+    weights = TokenWeights(
+        input=w_input if w_input is not None else 1.0,
+        output=w_output if w_output is not None else 1.0,
+        cache_create=w_cache_create if w_cache_create is not None else 0.0,
+        cache_read=w_cache_read if w_cache_read is not None else 0.0,
+    )
+    settings = Settings(plan=plan, limits=limits, weights=weights)
     if claude_dir is not None:
         settings.claude_dir = claude_dir
     if prices_path is not None:
@@ -62,9 +72,36 @@ def _root(
         Optional[Path], typer.Option("--claude-dir", help="Path to ~/.claude/projects.")
     ] = None,
     prices_path: Annotated[Optional[Path], typer.Option("--prices", help="JSON price table override.")] = None,
+    w_input: Annotated[
+        Optional[float], typer.Option("--weight-input", help="Weight for input tokens (default 1.0).")
+    ] = None,
+    w_output: Annotated[
+        Optional[float], typer.Option("--weight-output", help="Weight for output tokens (default 1.0).")
+    ] = None,
+    w_cache_create: Annotated[
+        Optional[float],
+        typer.Option(
+            "--weight-cache-create",
+            help="Weight for cache_creation tokens (default 0.0 — excluded from rate-limit billable).",
+        ),
+    ] = None,
+    w_cache_read: Annotated[
+        Optional[float],
+        typer.Option("--weight-cache-read", help="Weight for cache_read tokens (default 0.0)."),
+    ] = None,
 ) -> None:
     _state["settings"] = _build_settings(
-        plan, limit_5h, limit_weekly, limit_weekly_opus, limits_path, claude_dir, prices_path
+        plan,
+        limit_5h,
+        limit_weekly,
+        limit_weekly_opus,
+        limits_path,
+        claude_dir,
+        prices_path,
+        w_input,
+        w_output,
+        w_cache_create,
+        w_cache_read,
     )
 
 

@@ -27,10 +27,11 @@ def test_5h_window_excludes_old_and_dedups(sample_jsonl: Path, frozen_now: datet
     settings = Settings(plan=Plan.max5, limits=PLAN_LIMITS[Plan.max5])
     snap = store.snapshot(settings, now=frozen_now)
 
-    # 5h window: rows 2 (100+200+50=350) + 3 (10+500=510) + 5 (40+60+20=120) = 980
-    assert snap.window_5h.billable_tokens == 980
+    # Default weights: input=1, output=1, cache_create=0, cache_read=0.
+    # 5h window: row 2 (100+200=300) + row 3 (10+500=510) + row 5 (40+60=100) = 910
+    assert snap.window_5h.billable_tokens == 910
     assert snap.window_5h.records == 3
-    # cache_read is tracked separately and NOT counted toward billable.
+    # cache_read is tracked separately.
     assert snap.window_5h.cache_read_tokens == 1000
     # Dedup verified: row #4 (same requestId as #2) didn't add again.
 
@@ -42,8 +43,46 @@ def test_weekly_window_includes_more(sample_jsonl: Path, frozen_now: datetime) -
     snap = store.snapshot(settings, now=frozen_now)
 
     # Weekly adds row #6 (1000 + 2000 = 3000). Row #7 is >7d old → excluded.
-    assert snap.window_weekly.billable_tokens == 980 + 3000
+    assert snap.window_weekly.billable_tokens == 910 + 3000
     assert snap.window_weekly.records == 4
+
+
+def test_cache_create_weight_included(sample_jsonl: Path, frozen_now: datetime) -> None:
+    """When cache_create weight is set to 1.0, it should be counted like input/output."""
+    from claude_monitor.config import TokenWeights
+
+    store = UsageStore()
+    _load(store, sample_jsonl)
+    settings = Settings(
+        plan=Plan.max5,
+        limits=PLAN_LIMITS[Plan.max5],
+        weights=TokenWeights(input=1, output=1, cache_create=1, cache_read=0),
+    )
+    snap = store.snapshot(settings, now=frozen_now)
+
+    # With cache_create weighted 1.0:
+    # row 2 (100+200+50=350) + row 3 (10+500+0=510) + row 5 (40+60+20=120) = 980
+    assert snap.window_5h.billable_tokens == 980
+
+
+def test_fractional_weights(sample_jsonl: Path, frozen_now: datetime) -> None:
+    """Output-weighted-5x formula should give a sensible result."""
+    from claude_monitor.config import TokenWeights
+
+    store = UsageStore()
+    _load(store, sample_jsonl)
+    settings = Settings(
+        plan=Plan.max5,
+        limits=PLAN_LIMITS[Plan.max5],
+        weights=TokenWeights(input=1, output=5, cache_create=1.25, cache_read=0.1),
+    )
+    snap = store.snapshot(settings, now=frozen_now)
+
+    # row 2: 100 + 200*5 + 50*1.25 + 1000*0.1 = 100 + 1000 + 62.5 + 100 = 1262.5
+    # row 3: 10 + 500*5 + 0 + 0 = 2510
+    # row 5: 40 + 60*5 + 20*1.25 + 0 = 40 + 300 + 25 = 365
+    # total: 4137.5 → int(4137.5) = 4137
+    assert snap.window_5h.billable_tokens == 4137
 
 
 def test_weekly_opus_window_only_counts_opus(sample_jsonl: Path, frozen_now: datetime) -> None:
@@ -76,14 +115,13 @@ def test_burn_rate_and_eta(sample_jsonl: Path, frozen_now: datetime) -> None:
     settings = Settings(plan=Plan.max5, limits=PLAN_LIMITS[Plan.max5])
 
     # Shift "now" so only the 30-min-old haiku row is within the 10-min burn window.
-    # Move now forward so that #5 is inside the 10min burn window: #5 is at now-30m,
-    # so we set now = #5.timestamp + 5min → burn window covers it.
     shifted_now = frozen_now - timedelta(minutes=30) + timedelta(minutes=5)
     snap = store.snapshot(settings, now=shifted_now)
 
-    # Row #5 billable = 40+60+20 = 120 in 10 minutes = 12 tok/min.
-    assert snap.burn_tokens_per_min == 12.0
-    # ETA to 5h limit (88,000) based on 12 tok/min should be a positive timedelta.
+    # Default weights: cache_create excluded.
+    # Row #5 billable = 40+60 = 100 in 10 minutes = 10 tok/min.
+    assert snap.burn_tokens_per_min == 10.0
+    # ETA to 5h limit (88,000) based on 10 tok/min should be a positive timedelta.
     assert snap.eta_5h is not None
     assert snap.eta_5h > timedelta(0)
 

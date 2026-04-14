@@ -12,9 +12,19 @@ from claude_monitor.config import (
     WINDOW_WEEKLY_SECONDS,
     PlanLimits,
     Settings,
+    TokenWeights,
 )
 from claude_monitor.models import ModelBreakdown, Snapshot, UsageRecord, Window
 from claude_monitor.pricing import PriceRow, compute_cost
+
+
+def _weighted_billable(rec: UsageRecord, w: TokenWeights) -> float:
+    return (
+        w.input * rec.input_tokens
+        + w.output * rec.output_tokens
+        + w.cache_create * rec.cache_creation_tokens
+        + w.cache_read * rec.cache_read_tokens
+    )
 
 
 def _utcnow() -> datetime:
@@ -87,11 +97,12 @@ class UsageStore:
         start: datetime,
         end: datetime,
         limit: int,
+        weights: TokenWeights,
         family_filter: str | None = None,
     ) -> Window:
         records = self._slice(start, end)
         by_family: dict[str, ModelBreakdown] = {}
-        billable = 0
+        billable = 0.0
         cache_read = 0
         cost = 0.0
         count = 0
@@ -99,7 +110,7 @@ class UsageStore:
             if family_filter is not None and rec.family != family_filter:
                 continue
             count += 1
-            billable += rec.billable_tokens
+            billable += _weighted_billable(rec, weights)
             cache_read += rec.cache_read_tokens
             mb = by_family.setdefault(rec.family, ModelBreakdown(family=rec.family))
             mb.records += 1
@@ -122,7 +133,7 @@ class UsageStore:
             label=label,
             start=start,
             end=end,
-            billable_tokens=billable,
+            billable_tokens=int(billable),
             cache_read_tokens=cache_read,
             limit=limit,
             records=count,
@@ -130,15 +141,16 @@ class UsageStore:
             cost_usd=cost,
         )
 
-    def burn_rate(self, now: datetime) -> tuple[float, dict[str, float]]:
+    def burn_rate(self, now: datetime, weights: TokenWeights) -> tuple[float, dict[str, float]]:
         start = now - timedelta(seconds=BURN_WINDOW_SECONDS)
         records = self._slice(start, now)
         minutes = BURN_WINDOW_SECONDS / 60.0
-        total = 0
-        by_family: dict[str, int] = {}
+        total = 0.0
+        by_family: dict[str, float] = {}
         for rec in records:
-            total += rec.billable_tokens
-            by_family[rec.family] = by_family.get(rec.family, 0) + rec.billable_tokens
+            w = _weighted_billable(rec, weights)
+            total += w
+            by_family[rec.family] = by_family.get(rec.family, 0.0) + w
         return (total / minutes, {k: v / minutes for k, v in by_family.items()})
 
     def _eta(self, window: Window, burn_per_min: float) -> timedelta | None:
@@ -151,28 +163,32 @@ class UsageStore:
     def snapshot(self, settings: Settings, now: datetime | None = None) -> Snapshot:
         now = now or _utcnow()
         limits: PlanLimits = settings.limits
+        weights: TokenWeights = settings.weights
 
         w5h = self._build_window(
             label="5h",
             start=now - timedelta(seconds=WINDOW_5H_SECONDS),
             end=now,
             limit=limits.h5,
+            weights=weights,
         )
         wweek = self._build_window(
             label="weekly",
             start=now - timedelta(seconds=WINDOW_WEEKLY_SECONDS),
             end=now,
             limit=limits.weekly_total,
+            weights=weights,
         )
         wopus = self._build_window(
             label="weekly_opus",
             start=now - timedelta(seconds=WINDOW_WEEKLY_SECONDS),
             end=now,
             limit=limits.weekly_opus,
+            weights=weights,
             family_filter="opus",
         )
 
-        burn, burn_fam = self.burn_rate(now)
+        burn, burn_fam = self.burn_rate(now, weights)
         session_ids = sorted({r.session_id for r in self._slice(now - timedelta(seconds=WINDOW_5H_SECONDS), now) if r.session_id})
 
         return Snapshot(

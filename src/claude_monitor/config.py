@@ -31,6 +31,30 @@ class PlanLimits:
     weekly_opus: int
 
 
+@dataclass(frozen=True)
+class TokenWeights:
+    """Weights applied to each token class when computing billable usage.
+
+    Default: only input + output count. Cache tokens are shown but not
+    counted toward the rate-limit windows (Anthropic's actual counting
+    formula is not publicly documented; this is the most defensible
+    approximation for most users).
+
+    Override via CLI flags or JSON — the right values for YOU are best
+    discovered through calibration.
+    """
+
+    input: float = 1.0
+    output: float = 1.0
+    cache_create: float = 0.0
+    cache_read: float = 0.0
+
+
+def default_weights() -> TokenWeights:
+    """Return the default weights. Kept as a function for easy monkey-patching in tests."""
+    return TokenWeights()
+
+
 # Approximate, user-overridable. Anthropic does not publish exact numbers
 # and they shift over time. Override via CLI flags or CLAUDE_MONITOR_LIMITS_JSON.
 PLAN_LIMITS: dict[Plan, PlanLimits] = {
@@ -48,6 +72,7 @@ def _default_claude_dir() -> Path:
 class Settings:
     plan: Plan = Plan.max5
     limits: PlanLimits = field(default_factory=lambda: PLAN_LIMITS[Plan.max5])
+    weights: TokenWeights = field(default_factory=default_weights)
     claude_dir: Path = field(default_factory=_default_claude_dir)
     prices_path: Path | None = None
 
