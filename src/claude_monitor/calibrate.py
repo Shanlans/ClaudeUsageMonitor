@@ -22,21 +22,34 @@ from claude_monitor.models import Snapshot
 from claude_monitor.tail import FileTailer
 
 # ---------------------------------------------------------------------------
-# Calibration prompt: ~5k input tokens (padding) + ask for ~1k output tokens
+# Calibration prompt: configurable padding + ask for ~1k output tokens
+# Size is tunable via CLAUDE_MONITOR_PADDING_SENTENCES (default 500 ≈ 5k tokens).
+# Reduce if you hit argv limits or the claude CLI crashes on long input.
 # ---------------------------------------------------------------------------
 _PADDING_SENTENCE = "The quick brown fox jumps over the lazy dog. "
-_PADDING = _PADDING_SENTENCE * 500  # ~5000 tokens of known padding
 
-CALIBRATION_PROMPT = (
-    "Below is a block of filler text used for calibration purposes. "
-    "Please read it, then follow the instruction at the end.\n\n"
-    "<filler>\n"
-    f"{_PADDING}\n"
-    "</filler>\n\n"
-    "INSTRUCTION: Count from 1 to 300, each number on its own line. "
-    "After all numbers, write exactly one line: CALIBRATION_COMPLETE\n"
-    "Do NOT add any other text, explanation, or formatting."
-)
+
+def _build_prompt() -> str:
+    import os
+    try:
+        n = int(os.environ.get("CLAUDE_MONITOR_PADDING_SENTENCES", "500"))
+    except ValueError:
+        n = 500
+    n = max(10, min(n, 2000))
+    padding = _PADDING_SENTENCE * n
+    return (
+        "Below is a block of filler text used for calibration purposes. "
+        "Please read it, then follow the instruction at the end.\n\n"
+        "<filler>\n"
+        f"{padding}\n"
+        "</filler>\n\n"
+        "INSTRUCTION: Count from 1 to 300, each number on its own line. "
+        "After all numbers, write exactly one line: CALIBRATION_COMPLETE\n"
+        "Do NOT add any other text, explanation, or formatting."
+    )
+
+
+CALIBRATION_PROMPT = _build_prompt()
 
 # ---------------------------------------------------------------------------
 # Persistence
@@ -138,33 +151,53 @@ def run_calibrate(settings: Settings, skip_prompt: bool = False) -> None:
     if not skip_prompt:
         # Step 2: send calibration prompt
         console.print("[bold bright_green][ calibrate ] step 2/5: sending calibration prompt via `claude -p` ...[/]")
-        console.print("  (padding ~5k input tokens + requesting 300-number output)\n")
+        console.print("  (padding ~5k input tokens + requesting 300-number output)")
+        console.print("  [green4](prompt piped via stdin to avoid Windows argv limits)[/]\n")
 
-        try:
-            result = subprocess.run(
-                ["claude", "-p", CALIBRATION_PROMPT],
-                capture_output=True,
-                text=True,
-                timeout=180,
-                cwd=str(Path.home()),
-            )
-        except FileNotFoundError:
+        # Resolve the executable — on Windows `claude` is often claude.cmd
+        # and subprocess won't find it without shutil.which.
+        import shutil
+        claude_exe = shutil.which("claude")
+        if claude_exe is None:
             console.print("[red]ERROR: `claude` CLI not found on PATH.[/]")
             console.print("Install it: [bold]npm install -g @anthropic-ai/claude-code[/]")
             return
+
+        try:
+            result = subprocess.run(
+                [claude_exe, "-p"],
+                input=CALIBRATION_PROMPT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                cwd=str(Path.home()),
+            )
         except subprocess.TimeoutExpired:
-            console.print("[red]ERROR: calibration prompt timed out after 180s.[/]")
+            console.print("[red]ERROR: calibration prompt timed out after 300s.[/]")
+            return
+        except OSError as e:
+            console.print(f"[red]ERROR spawning claude: {e}[/]")
             return
 
         if result.returncode != 0:
             console.print(f"[yellow]Warning: claude exited with code {result.returncode}[/]")
+            if result.returncode in (3221226505, -1073740791):
+                console.print(
+                    "  [yellow]That's STATUS_STACK_BUFFER_OVERRUN — usually the claude CLI\n"
+                    "  crashed on a long input. Try reducing the prompt size via\n"
+                    "  CLAUDE_MONITOR_PADDING_SENTENCES env var (default 500, try 100).[/]"
+                )
             if result.stderr:
-                console.print(f"  stderr: {result.stderr[:300]}")
+                console.print(f"  stderr: {result.stderr[:500]}")
+            if result.stdout:
+                console.print(f"  stdout: {result.stdout[:500]}")
 
         # Check output
         output_lines = (result.stdout or "").strip().split("\n")
         has_marker = any("CALIBRATION_COMPLETE" in line for line in output_lines)
-        console.print(f"  claude responded: {len(output_lines)} lines, "
+        console.print(f"\n  claude responded: {len(output_lines)} lines, "
                        f"marker={'[green]found[/]' if has_marker else '[yellow]not found[/]'}")
 
         # Wait for JSONL flush
